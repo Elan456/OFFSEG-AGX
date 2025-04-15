@@ -9,6 +9,7 @@ import sys
 import numpy as np
 import tensorflow as tf
 import pandas as pd
+from typing import Dict, List 
 #from libKMCUDA import kmeans_cuda
 from PIL import Image,ImageOps
 import time
@@ -20,28 +21,59 @@ torch.set_grad_enabled(False)
 import os
 from sklearn.cluster import KMeans
 from fast_pytorch_kmeans import KMeans
+import yaml 
 
 import lib.transform_cv2 as T
 from lib.models import model_factory
 from configs import cfg_factory
 
 np.random.seed(123)
-pal= np.random.randint(0, 256, (256, 3), dtype=np.uint8)
+
+# Labels
+# Loading ontology yaml
+with open("/home/df/RELLIS/ontology.yaml", 'r') as stream:
+    try:
+        ontology = yaml.safe_load(stream)
+    except yaml.YAMLError as exc:
+        print(exc)
+# Loading labels
+print(ontology)
+labels: Dict = ontology[0]  # {0: 'void', ....}
+pal_dict = ontology[1]   # {0: [0, 0, 0], 1: [255, 0, 0], ...}
+
+# Convert pal_dict to numpy array in shape of (x, 3)
+pal = np.zeros((max(pal_dict.keys()) + 1, 3), dtype=np.uint8)
+for i, color in pal_dict.items():
+    pal[i] = color
+
+print("PAL SHAPE: ", pal.shape)
 
 #torch_kmeans = KMeans(n_clusters=4, mode='euclidean', verbose=1) # 4 classes
 #image path
-img_path='/path/to/Directory'
+img_path='/home/df/RELLIS/Rellis-3D/00000/pylon_camera_node'
 #result path
-final_path='/path/to/Directory'
+final_path='/home/df/OFFSEG-AGX/output'
 #Path to Model save path.
-dataset='/path/to/Directory/model_final.pth'
+dataset='Models/BiSeNet_RUGD/model_final.pth'
+
+
+# BEGIN Monkey patching b/c wrong TensorFlow version
+original_from_config = tf.keras.layers.DepthwiseConv2D.from_config
+
+def patched_from_config(config):
+    config.pop('groups', None)
+    return original_from_config(config)
+
+tf.keras.layers.DepthwiseConv2D.from_config = patched_from_config
+# END Monkey patching
 
 #Function for 4 calss image segmentation
 def img_seg(im,net):
     im = to_tensor(dict(im=im, lb=None))['im'].unsqueeze(0).cuda()
     out = net(im)[0].argmax(dim=1).squeeze().detach().cpu().numpy()
+    print(out)
     pred=pal[out]
-    out=cv2.cvtColor(out.astype('uint8'),cv2.COLOR_GRAY2BGR)
+    out=cv2.cvtColor(out.astype('uint8'),cv2.COLOR_GRAY2RGB)
     return pred , out
 
 #Function for Kmeans clustering.     
@@ -64,7 +96,7 @@ def palette_lst(masked_img,n_classes=4):
 
     ## Uncomment below code for Pytorch based Kmeans clustering.
     torch_kmeans = KMeans(n_clusters=n_classes, mode='euclidean', verbose=1)
-    input = torch.tensor(data)
+    input = torch.tensor(data.to_numpy(), dtype=torch.float32).cuda()   
     data['Cluster'] = torch_kmeans.fit_predict(input).cpu().numpy()
     palette = torch_kmeans.centroids.cpu().numpy() 
 
@@ -152,7 +184,7 @@ args = parse.parse_args()
 cfg = cfg_factory[args.model]
 
 #Load the classification Model
-model = tf.keras.models.load_model('../classification/model/keras_model.h5')
+model = tf.keras.models.load_model('Models/Classification/keras_model.h5')
 
 #Loading Segmentation Model.
 net = model_factory[cfg.model_type](4)
@@ -167,13 +199,35 @@ to_tensor = T.ToTensor(
 img_list=sorted(os.listdir(img_path))
 #label_list=sorted(os.listdir(save_path))
 for i in range(len(img_list)):
+    print("Processing image: ",img_list[i])
     image=cv2.imread(os.path.join(img_path,img_list[i]))
     #pool=cv2.imread(os.path.join(save_path,label_list[i]))
     im=image.copy()[:, :, ::-1]
     #image=cv2.resize(image,(1024,640))
     pred,pool =img_seg(im,net)
+    print("pred shape: ",pred.shape)
+    print("pool shape: ",pool.shape)
+
+    # Add a legend to the right of the image showing the color of each label
+    # Create a blank image for the legend
+    for id, color in pal_dict.items():
+        if id > 3:
+            continue   # THe model is only trained to do labels 0-3 (4 total)
+        label = labels.get(id, id)
+        color = tuple(color)
+        # Draw a black background for each label, with a colored rectangle
+        cv2.rectangle(pred, (0, 30 + 20 * id), (120, 10 + 20 * id), (255,255,255), -1)
+        # Draw the label text on top of the rectangle
+        cv2.putText(pred, label, (10, 26 + 20 * id), cv2.FONT_HERSHEY_SIMPLEX, 0.75, (0,0,0), 1)
+        # Draw a colored rectangle for the label
+        cv2.rectangle(pred, (100, 30 + 20 * id), (120, 10 + 20 * id), color, -1)
+        cv2.rectangle(pred, (0, 30 + 20 * id), (120, 10 + 20 * id), (0,0,0), 1, cv2.LINE_AA)
     cv2.imwrite(os.path.join(final_path,img_list[i][:len(img_list[i])]),pred)
-    pool1=pool.copy()
-    msk_img,predicts= col_seg(image,pool,model)
-    final_pool=mask_comb(pool1,msk_img,predicts)
-    cv2.imwrite(os.path.join(final_path,img_list[i]),pal[final_pool])
+
+
+    # Uncomment if you want traversibility shown
+    # pool1=pool.copy()
+    # msk_img,predicts= col_seg(image,pool,model)
+    # final_pool=mask_comb(pool1,msk_img,predicts)
+    # print("Wrote output to ",os.path.join(final_path,img_list[i]))
+    # cv2.imwrite(os.path.join(final_path,img_list[i]),pal[final_pool])
