@@ -22,6 +22,8 @@ import os
 from sklearn.cluster import KMeans
 from fast_pytorch_kmeans import KMeans
 import yaml 
+from tqdm import tqdm
+
 
 import lib.transform_cv2 as T
 from lib.models import model_factory
@@ -198,7 +200,7 @@ to_tensor = T.ToTensor(
 )
 img_list=sorted(os.listdir(img_path))
 #label_list=sorted(os.listdir(save_path))
-for i in range(len(img_list)):
+for i in tqdm(range(len(img_list))):
     print("Processing image: ",img_list[i])
     image=cv2.imread(os.path.join(img_path,img_list[i]))
     #pool=cv2.imread(os.path.join(save_path,label_list[i]))
@@ -210,6 +212,7 @@ for i in range(len(img_list)):
 
     # Add a legend to the right of the image showing the color of each label
     # Create a blank image for the legend
+    """
     for id, color in pal_dict.items():
         if id > 3:
             continue   # THe model is only trained to do labels 0-3 (4 total)
@@ -223,7 +226,7 @@ for i in range(len(img_list)):
         cv2.rectangle(pred, (100, 30 + 20 * id), (120, 10 + 20 * id), color, -1)
         cv2.rectangle(pred, (0, 30 + 20 * id), (120, 10 + 20 * id), (0,0,0), 1, cv2.LINE_AA)
     cv2.imwrite(os.path.join(final_path,img_list[i][:len(img_list[i])]),pred)
-
+    """
 
     # Uncomment if you want traversibility shown
     # pool1=pool.copy()
